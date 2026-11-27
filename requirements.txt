@@ -1,0 +1,3 @@
+PySide6
+browser-cookie3
+pyinstaller
