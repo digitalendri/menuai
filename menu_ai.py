@@ -792,4 +792,38 @@ class Main(QMainWindow):
         v.setFocus()
 
 STYLE = """
-#side{background:#ffffff;border-right:1px
+#side{background:#ffffff;border-right:1px solid #d5dedb}
+#title{font-size:18px;font-weight:700;padding:2px 4px}
+#bar{background:#ffffff;border-bottom:1px solid #d5dedb}
+#empty{color:#5d6d69;font-size:16px}
+QListWidget{background:transparent;outline:0}
+QListWidget::item{border-radius:10px;padding:2px 6px}
+QListWidget::item:hover{background:#eef2f0}
+QListWidget::item:selected{background:#d9efe8;color:#14211f;font-weight:bold}
+QLineEdit,QPlainTextEdit{border:1px solid #d5dedb;border-radius:8px;padding:8px 10px;background:#eef2f0}
+QPushButton,QToolButton{border:1px solid #d5dedb;border-radius:8px;padding:8px 14px;background:#ffffff}
+QPushButton:hover,QToolButton:hover{background:#eef2f0}
+QToolButton::menu-indicator{image:none}
+QPushButton#primary{background:#0e7c66;color:#ffffff;border:0;font-weight:bold}
+QPushButton#primary:hover{background:#0b6653}
+QPushButton#ghost{border:0;background:transparent;font-size:18px;padding:0}
+QPushButton#ghost:hover{background:#eef2f0}
+QComboBox{border:1px solid #d5dedb;border-radius:8px;padding:7px 10px;background:#ffffff;min-width:120px}
+"""
+
+def main():
+    global DATA_DIR
+    app = QApplication(sys.argv)
+    app.setApplicationName("MenuAI")
+    DATA_DIR = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
+    app.setStyleSheet(STYLE)
+
+    # Menjalankan pengecek update di latar belakang
+    threading.Thread(target=cek_update, daemon=True).start()
+
+    win = Main()
+    win.show()
+    sys.exit(app.exec())
+
+if __name__ == "__main__":
+    main()
