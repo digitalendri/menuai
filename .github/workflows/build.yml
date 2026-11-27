@@ -1,4 +1,4 @@
-name: Build EXE
+name: Build Windows
 
 on:
   push:
@@ -21,12 +21,16 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Build EXE with PyInstaller
+    - name: Build EXE
       run: |
         pyinstaller --noconfirm --windowed --name "MenuAI" --icon "icon.ico" --collect-all PySide6 menu_ai.py
+
+    - name: Zip App
+      run: |
+        Compress-Archive -Path dist/MenuAI/* -DestinationPath MenuAI-Build.zip
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: MenuAI-Windows
-        path: dist/MenuAI/
+        name: MenuAI-Artifact
+        path: MenuAI-Build.zip
