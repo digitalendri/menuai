@@ -1,19 +1,18 @@
-"""Menu AI (PySide6): daftar AI di kiri, jendela AI di kanan.
-
-Fitur: sidebar bisa dilipat, atur daftar AI (urutan, sembunyikan, ubah, tambah, hapus),
-prompt favorit, dan beberapa akun per AI (tiap akun punya login sendiri).
-"""
+"""Menu AI (PySide6): daftar AI di kiri, jendela AI di kanan."""
 import json
 import os
 import re
 import sys
 import uuid
+import time
+import threading
+import subprocess
+import tempfile
+import requests
+
 import browser_cookie3
 from PySide6.QtNetwork import QNetworkCookie
-from PySide6.QtCore import QByteArray
-import time
-
-from PySide6.QtCore import QSize, QStandardPaths, Qt, QUrl
+from PySide6.QtCore import QSize, QStandardPaths, Qt, QUrl, QTimer
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -27,6 +26,10 @@ from PySide6.QtWidgets import (
 os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu --disable-gpu-compositing")
 
 GREY = "#6b7a76"
+
+# --- PENGATURAN AUTO-UPDATE ---
+CURRENT_VERSION = "v1.0.0" # Ubah angka ini setiap kali mau rilis versi baru
+REPO_API = "https://api.github.com/repos/digitalendri/menui/releases/latest"
 
 DEFAULTS = [
     {"id": "chatgpt", "n": "ChatGPT", "u": "https://chatgpt.com", "c": "#10a37f"},
@@ -56,10 +59,72 @@ DATA_DIR = ""
 popups = []
 PROFILES = {}
 
+# --- FUNGSI AUTO-UPDATE ---
+def cek_update():
+    try:
+        res = requests.get(REPO_API, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            latest_version = data["tag_name"]
+            
+            if latest_version != CURRENT_VERSION:
+                zip_url = None
+                for asset in data.get("assets", []):
+                    if asset["name"].endswith(".zip"):
+                        zip_url = asset["browser_download_url"]
+                        break
+                
+                if zip_url:
+                    def show_dialog():
+                        msg = QMessageBox()
+                        msg.setWindowTitle("Pembaruan Tersedia")
+                        msg.setText(f"Versi baru ({latest_version}) tersedia!\nVersi kamu saat ini: {CURRENT_VERSION}\n\nUpdate sekarang?")
+                        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                        if msg.exec() == QMessageBox.StandardButton.Yes:
+                            threading.Thread(target=download_and_update, args=(zip_url,), daemon=True).start()
+                    
+                    QTimer.singleShot(1000, show_dialog)
+    except Exception as e:
+        print("Gagal cek update:", e)
+
+def download_and_update(url):
+    try:
+        temp_dir = tempfile.gettempdir()
+        zip_path = os.path.join(temp_dir, "menuai_update.zip")
+        
+        with requests.get(url, stream=True) as r:
+            r.raise_for_status()
+            with open(zip_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+
+        if getattr(sys, 'frozen', False):
+            app_dir = os.path.dirname(sys.executable)
+        else:
+            app_dir = os.path.dirname(os.path.abspath(__file__))
+
+        bat_path = os.path.join(temp_dir, "update_menuai.bat")
+        with open(bat_path, "w") as bat:
+            bat.write(f"""
+@echo off
+echo Menunggu aplikasi lama ditutup...
+timeout /t 3 /nobreak > NUL
+echo Mengekstrak pembaruan...
+powershell -Command "Expand-Archive -Path '{zip_path}' -DestinationPath '{app_dir}' -Force"
+echo Membuka aplikasi kembali...
+start "" "{os.path.join(app_dir, 'MenuAI.exe')}"
+del "%~f0"
+""")
+
+        subprocess.Popen([bat_path], shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        QApplication.quit()
+
+    except Exception as e:
+        QMessageBox.critical(None, "Update Gagal", f"Gagal mendownload update:\n{e}")
+# ---------------------------
 
 def config_path():
     return os.path.join(DATA_DIR, "config.json")
-
 
 def load_config():
     try:
@@ -80,7 +145,6 @@ def load_config():
     cfg.pop("custom", None)
     return cfg
 
-
 def save_config(cfg):
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
@@ -88,7 +152,6 @@ def save_config(cfg):
             json.dump(cfg, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
-
 
 def dot_icon(letter, color, size=28):
     pm = QPixmap(size, size)
@@ -107,11 +170,9 @@ def dot_icon(letter, color, size=28):
     p.end()
     return QIcon(pm)
 
-
 def on_download(req):
     req.setDownloadDirectory(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation))
     req.accept()
-
 
 def get_profile(key):
     if key in PROFILES:
@@ -130,7 +191,6 @@ def get_profile(key):
     p.downloadRequested.connect(on_download)
     PROFILES[key] = p
     return p
-
 
 def inject_cookies_from_chrome(profile, domain=".dola.ai"):
     print(f"Mencoba menarik cookie untuk {domain}...")
@@ -154,7 +214,6 @@ def inject_cookies_from_chrome(profile, domain=".dola.ai"):
     except Exception as e:
         print(f"Gagal mengambil cookie: {e}")
         return 0
-
 
 class AIPage(QWebEnginePage):
     def __init__(self, profile, parent=None):
@@ -186,7 +245,6 @@ class AIPage(QWebEnginePage):
         view.show()
         popups.append(view)
         return page
-
 
 class AIEdit(QDialog):
     def __init__(self, title, n, u, taken, parent=None):
@@ -228,7 +286,6 @@ class AIEdit(QDialog):
             return self.warn("Alamat situs tidak valid.")
         self.val = (n, u)
         self.accept()
-
 
 class AIDialog(QDialog):
     def __init__(self, ais, parent=None):
@@ -311,7 +368,6 @@ class AIDialog(QDialog):
             a["hidden"] = it.checkState() != Qt.CheckState.Checked
             out.append(a)
         return out
-
 
 class PromptDialog(QDialog):
     def __init__(self, prompts, parent=None):
@@ -402,7 +458,6 @@ class PromptDialog(QDialog):
         if 0 <= self.row < len(self.prompts):
             del self.prompts[self.row]
             self.refresh(-1)
-
 
 class Main(QMainWindow):
     def __init__(self):
@@ -736,39 +791,5 @@ class Main(QMainWindow):
         v.page().runJavaScript(JS_INSERT % json.dumps(text), done)
         v.setFocus()
 
-
 STYLE = """
-#side{background:#ffffff;border-right:1px solid #d5dedb}
-#title{font-size:18px;font-weight:700;padding:2px 4px}
-#bar{background:#ffffff;border-bottom:1px solid #d5dedb}
-#empty{color:#5d6d69;font-size:16px}
-QListWidget{background:transparent;outline:0}
-QListWidget::item{border-radius:10px;padding:2px 6px}
-QListWidget::item:hover{background:#eef2f0}
-QListWidget::item:selected{background:#d9efe8;color:#14211f;font-weight:bold}
-QLineEdit,QPlainTextEdit{border:1px solid #d5dedb;border-radius:8px;padding:8px 10px;background:#eef2f0}
-QPushButton,QToolButton{border:1px solid #d5dedb;border-radius:8px;padding:8px 14px;background:#ffffff}
-QPushButton:hover,QToolButton:hover{background:#eef2f0}
-QToolButton::menu-indicator{image:none}
-QPushButton#primary{background:#0e7c66;color:#ffffff;border:0;font-weight:bold}
-QPushButton#primary:hover{background:#0b6653}
-QPushButton#ghost{border:0;background:transparent;font-size:18px;padding:0}
-QPushButton#ghost:hover{background:#eef2f0}
-QComboBox{border:1px solid #d5dedb;border-radius:8px;padding:7px 10px;background:#ffffff;min-width:120px}
-"""
-
-
-def main():
-    global DATA_DIR
-    app = QApplication(sys.argv)
-    app.setApplicationName("MenuAI")
-    DATA_DIR = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
-    app.setStyleSheet(STYLE)
-
-    win = Main()
-    win.show()
-    sys.exit(app.exec())
-
-
-if __name__ == "__main__":
-    main()
+#side{background:#ffffff;border-right:1px
