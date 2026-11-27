@@ -8,6 +8,10 @@ import os
 import re
 import sys
 import uuid
+import browser_cookie3
+from PySide6.QtNetwork import QNetworkCookie
+from PySide6.QtCore import QByteArray
+import time
 
 from PySide6.QtCore import QSize, QStandardPaths, Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPixmap
@@ -20,8 +24,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-# Beberapa laptop gagal membuat konteks GPU untuk Chromium (panel kanan jadi kosong).
-# Pakai rendering software supaya stabil. Harus di-set sebelum QApplication dibuat.
 os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu --disable-gpu-compositing")
 
 GREY = "#6b7a76"
@@ -36,10 +38,8 @@ DEFAULTS = [
     {"id": "deepseek", "n": "DeepSeek", "u": "https://chat.deepseek.com", "c": "#4d6bfe"},
 ]
 
-# Izin yang boleh diberikan otomatis ke situs AI (mikrofon, kamera, clipboard)
 ALLOWED_PERMS = {"MediaAudioCapture", "MediaVideoCapture", "MediaAudioVideoCapture", "ClipboardReadWrite"}
 
-# Menyisipkan teks ke kotak chat yang sedang aktif (atau kotak chat pertama yang ditemukan)
 JS_INSERT = """(function(t){
 var e=document.activeElement;
 function ok(x){return x&&(x.tagName==='TEXTAREA'||x.isContentEditable);}
@@ -53,8 +53,8 @@ document.execCommand('insertText',false,t);
 return true;})(%s)"""
 
 DATA_DIR = ""
-popups = []  # jendela popup (misalnya login) supaya tidak langsung dibuang
-PROFILES = {}  # satu profil browser per akun (cookie dan login terpisah)
+popups = []
+PROFILES = {}
 
 
 def config_path():
@@ -73,7 +73,6 @@ def load_config():
     cfg.setdefault("acc_last", {})
     cfg.setdefault("side_collapsed", False)
     if "ais" not in cfg:
-        # Migrasi dari versi lama: AI bawaan + AI tambahan lama
         ais = [dict(d, hidden=False) for d in DEFAULTS]
         for c in cfg.get("custom", []):
             ais.append({"id": "c" + uuid.uuid4().hex[:8], "n": c["n"], "u": c["u"], "c": GREY, "hidden": False})
@@ -115,8 +114,6 @@ def on_download(req):
 
 
 def get_profile(key):
-    """Profil permanen per akun. Akun pertama ('default') memakai profil lama,
-    jadi login yang sudah ada tetap tersimpan."""
     if key in PROFILES:
         return PROFILES[key]
     app = QApplication.instance()
@@ -129,17 +126,40 @@ def get_profile(key):
         p.setPersistentStoragePath(os.path.join(DATA_DIR, "web_" + key))
         p.setCachePath(os.path.join(DATA_DIR, "cache_" + key))
     p.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.AllowPersistentCookies)
-    # Buang penanda "QtWebEngine" dari user-agent supaya tampak seperti Chrome biasa
     p.setHttpUserAgent(re.sub(r"\s*QtWebEngine/\S+", "", p.httpUserAgent()))
     p.downloadRequested.connect(on_download)
     PROFILES[key] = p
     return p
 
 
+def inject_cookies_from_chrome(profile, domain=".dola.ai"):
+    print(f"Mencoba menarik cookie untuk {domain}...")
+    try:
+        cj = browser_cookie3.chrome(domain_name=domain)
+        store = profile.cookieStore()
+        store.deleteAllCookies()
+        count = 0
+        for c in cj:
+            cookie = QNetworkCookie(c.name.encode(), c.value.encode())
+            cookie.setDomain(c.domain)
+            cookie.setPath(c.path)
+            if c.expires:
+                cookie.setExpirationDate(time.gmtime(c.expires))
+            if c.secure:
+                cookie.setSecure(True)
+            store.setCookie(cookie, QUrl("https://" + domain.replace(".", "", 1)))
+            count += 1
+        print(f"Berhasil menyuntikkan {count} cookie.")
+        return count
+    except Exception as e:
+        print(f"Gagal mengambil cookie: {e}")
+        return 0
+
+
 class AIPage(QWebEnginePage):
     def __init__(self, profile, parent=None):
         super().__init__(profile, parent)
-        if hasattr(self, "permissionRequested"):  # Qt 6.8+
+        if hasattr(self, "permissionRequested"):
             self.permissionRequested.connect(self._on_permission)
         else:
             self.featurePermissionRequested.connect(self._on_feature)
@@ -157,7 +177,6 @@ class AIPage(QWebEnginePage):
         self.setFeaturePermission(origin, feature, policy)
 
     def createWindow(self, _type):
-        # Link target=_blank / popup login dibuka di jendela terpisah dengan profil yang sama
         view = QWebEngineView()
         page = AIPage(self.profile(), view)
         view.setPage(page)
@@ -169,7 +188,6 @@ class AIPage(QWebEnginePage):
         return page
 
 
-# ---------- dialog: tambah / ubah satu AI ----------
 class AIEdit(QDialog):
     def __init__(self, title, n, u, taken, parent=None):
         super().__init__(parent)
@@ -212,7 +230,6 @@ class AIEdit(QDialog):
         self.accept()
 
 
-# ---------- dialog: atur daftar AI ----------
 class AIDialog(QDialog):
     def __init__(self, ais, parent=None):
         super().__init__(parent)
@@ -296,7 +313,6 @@ class AIDialog(QDialog):
         return out
 
 
-# ---------- dialog: prompt favorit ----------
 class PromptDialog(QDialog):
     def __init__(self, prompts, parent=None):
         super().__init__(parent)
@@ -392,7 +408,7 @@ class Main(QMainWindow):
     def __init__(self):
         super().__init__()
         self.cfg = load_config()
-        self.views = {}  # (id AI, id akun) -> QWebEngineView
+        self.views = {}
         self.current = None
         self.cur_acc = None
         self.collapsed = bool(self.cfg.get("side_collapsed"))
@@ -404,7 +420,6 @@ class Main(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # --- kiri: daftar AI ---
         self.side = QWidget()
         self.side.setObjectName("side")
         sl = QVBoxLayout(self.side)
@@ -433,7 +448,6 @@ class Main(QMainWindow):
         sl.addWidget(self.btn_manage)
         root.addWidget(self.side)
 
-        # --- kanan: jendela AI ---
         right = QWidget()
         rl = QVBoxLayout(right)
         rl.setContentsMargins(0, 0, 0, 0)
@@ -488,10 +502,9 @@ class Main(QMainWindow):
         if last:
             self.show_ai(last)
 
-    # ---------- data ----------
     def find(self, key):
         for a in self.cfg["ais"]:
-            if a["id"] == key or a["n"] == key:  # nama dipakai oleh versi lama
+            if a["id"] == key or a["n"] == key:
                 return a
         return None
 
@@ -537,7 +550,6 @@ class Main(QMainWindow):
             self.combo.addItem(x["name"], x["id"])
         self.combo.setCurrentIndex(max(0, self.combo.findData(acc_id)))
 
-    # ---------- sidebar ----------
     def set_collapsed(self, c, save=True):
         self.collapsed = c
         self.side.setFixedWidth(64 if c else 240)
@@ -548,7 +560,6 @@ class Main(QMainWindow):
             save_config(self.cfg)
         self.refresh_list()
 
-    # ---------- aksi ----------
     def on_item(self, item):
         a = self.find(item.data(Qt.ItemDataRole.UserRole))
         if a:
@@ -564,13 +575,20 @@ class Main(QMainWindow):
         self.current = a
         self.cur_acc = acc_id
         key = (a["id"], acc_id)
+        
         if key not in self.views:
             pkey = "default" if acc_id == "default" else a["id"] + "_" + acc_id
+            profile = get_profile(pkey)
+            
+            if "dola.ai" in a["u"]:
+                inject_cookies_from_chrome(profile, domain=".dola.ai")
+
             view = QWebEngineView()
-            view.setPage(AIPage(get_profile(pkey), view))
+            view.setPage(AIPage(profile, view))
             view.load(QUrl(a["u"]))
             self.stack.addWidget(view)
             self.views[key] = view
+
         self.stack.setCurrentWidget(self.views[key])
         self.bar_title.setText(a["n"])
         self.fill_combo(accs, acc_id)
@@ -598,7 +616,6 @@ class Main(QMainWindow):
         if self.current:
             QDesktopServices.openUrl(QUrl(self.current["u"]))
 
-    # ---------- akun ----------
     def on_account(self, index):
         if self.current:
             self.show_ai(self.current, self.combo.itemData(index))
@@ -660,7 +677,6 @@ class Main(QMainWindow):
         self.cfg["acc_last"].pop(ai["id"], None)
         self.show_ai(ai)
 
-    # ---------- atur daftar AI ----------
     def manage_ais(self):
         old = {a["id"]: a["u"] for a in self.cfg["ais"]}
         d = AIDialog(self.cfg["ais"], self)
@@ -670,7 +686,7 @@ class Main(QMainWindow):
         ids = {a["id"] for a in new}
         for a in new:
             if a["id"] in old and old[a["id"]] != a["u"]:
-                self.drop_views(a["id"])  # alamat berubah: muat ulang dari alamat baru
+                self.drop_views(a["id"])
         for i in old:
             if i not in ids:
                 self.drop_views(i)
@@ -685,7 +701,6 @@ class Main(QMainWindow):
         save_config(self.cfg)
         self.refresh_list()
 
-    # ---------- prompt favorit ----------
     def show_prompts(self):
         m = QMenu(self)
         ps = self.cfg["prompts"]
