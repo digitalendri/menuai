@@ -1,0 +1,44 @@
+name: Rilis Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Nomor versi (misal: v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Build EXE
+      run: |
+        pyinstaller --noconfirm --windowed --name "MenuAI" --icon "icon.ico" --collect-all PySide6 menu_ai.py
+
+    - name: Zip App
+      run: |
+        Compress-Archive -Path dist/MenuAI/* -DestinationPath MenuAI-Windows.zip
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ github.event.inputs.version }}
+        files: MenuAI-Windows.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
