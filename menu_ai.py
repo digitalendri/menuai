@@ -78,10 +78,16 @@ def cek_update():
                     def show_dialog():
                         msg = QMessageBox()
                         msg.setWindowTitle("Pembaruan Tersedia")
-                        msg.setText(f"Versi baru ({latest_version}) tersedia!\nVersi kamu saat ini: {CURRENT_VERSION}\n\nUpdate sekarang?")
+                        msg.setText(f"Versi baru ({latest_version}) tersedia!\nVersi kamu saat ini: {CURRENT_VERSION}\n\nApakah kamu ingin mengunduhnya sekarang?")
+                        msg.setInformativeText("Jika memilih 'Nanti', kamu bisa mengunduhnya secara manual kapan saja melalui halaman GitHub Releases.")
                         msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                        msg.setDefaultButton(QMessageBox.StandardButton.No) # Fokus awal ke "No/Nanti"
+                        
+                        # Jika klik Yes, buka browser ke halaman rilis (tidak auto-download)
                         if msg.exec() == QMessageBox.StandardButton.Yes:
-                            threading.Thread(target=download_and_update, args=(zip_url,), daemon=True).start()
+                            import webbrowser
+                            # Ambil URL halaman rilis dari GitHub, bukan link zip langsung
+                            webbrowser.open(data["html_url"])
                     
                     QTimer.singleShot(1000, show_dialog)
     except Exception as e:
